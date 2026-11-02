@@ -49,8 +49,15 @@ async function main() {
 
   console.log("== Workflow de révision de configuration — test d'intégration ==");
 
-  const owner = await login("owner", "owner123");
-  const admin = await login("admin", "admin123");
+  const ownerUsername = process.env.RG_TEST_OWNER_USERNAME;
+  const ownerPassword = process.env.RG_TEST_OWNER_PASSWORD;
+  const adminUsername = process.env.RG_TEST_ADMIN_USERNAME;
+  const adminPassword = process.env.RG_TEST_ADMIN_PASSWORD;
+  if (!ownerUsername || !ownerPassword || !adminUsername || !adminPassword) {
+    throw new Error("Définir RG_TEST_OWNER_USERNAME, RG_TEST_OWNER_PASSWORD, RG_TEST_ADMIN_USERNAME et RG_TEST_ADMIN_PASSWORD pour lancer ce test.");
+  }
+  const owner = await login(ownerUsername, ownerPassword);
+  const admin = await login(adminUsername, adminPassword);
   T("connexion owner + admin (2 sessions pour la séparation des tâches)", owner !== null && admin !== null);
 
   // 0) état initial: le mode est AUDIT, téléport activé
