@@ -1,0 +1,277 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// RHODE GUARD ULTIMATE — Schéma anti-cheat FiveM v2
+// Panel (Prisma/SQLite) — la base de jeu (oxmysql) a ses
+// propres migrations versionnées dans la ressource.
+// ============================================================
+
+model Staff {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  role         String   @default("SUPPORT") // OWNER | ADMIN | MODERATOR | SUPPORT | AUDITOR
+  isActive     Boolean  @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions          StaffSession[]
+  bansCreated       Ban[]         @relation("BansCreated")
+  bansRevoked       Ban[]         @relation("BansRevoked")
+  auditLogs         AuditLog[]
+  casesAssigned     CaseFile[]    @relation("CasesAssigned")
+  caseNotes         CaseNote[]
+  caseTransitions   CaseTransition[] @relation("CaseTransitions")
+  configAuthored    ConfigRevision[] @relation("ConfigAuthor")
+  configApproved    ConfigRevision[] @relation("ConfigApprover")
+  appealsHandled    Appeal[]        @relation("AppealsHandled")
+}
+
+model StaffSession {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  staffId   String
+  staff     Staff    @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  ip        String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([staffId])
+}
+
+model GameServer {
+  id            String   @id @default(cuid())
+  name          String
+  apiKey        String   @unique
+  ip            String?
+  version       String   @default("2.1.0")
+  onlinePlayers Int      @default(0)
+  maxPlayers    Int      @default(64)
+  isOnline      Boolean  @default(false)
+  healthState   String   @default("INITIALISATION") // INITIALISATION | PRET | DEGRADE | ARRET
+  queueSize     Int      @default(0) // file de preuves locale déclarée par la ressource
+  detectorsActive Int    @default(0)
+  lastHeartbeat DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  detections Detection[]
+  bans       Ban[]
+  cases      CaseFile[]
+}
+
+model Player {
+  id          String   @id @default(cuid())
+  license     String   @unique // identifiant principal license:hex
+  name        String
+  identifiers String   @default("{}") // JSON: steam, discord, xbl, live, ip...
+  hwids       String   @default("[]") // JSON: liste HWID/tokens
+  riskScore   Int      @default(0)
+  playTimeMin Int      @default(0)
+  firstSeen   DateTime @default(now())
+  lastSeen    DateTime @default(now())
+  isOnline    Boolean  @default(false)
+
+  detections Detection[]
+  bans       Ban[]
+  cases      CaseFile[]
+
+  @@index([name])
+  @@index([riskScore])
+}
+
+model Detection {
+  id              String    @id @default(cuid())
+  serverId        String
+  server          GameServer @relation(fields: [serverId], references: [id])
+  playerId        String
+  player          Player    @relation(fields: [playerId], references: [id])
+  type            String // SPEEDHACK | TELEPORT | FLY_NOCLIP | ... | ECONOMY_ANOMALY | TELEMETRY_MISMATCH
+  severity        String // LOW | MEDIUM | HIGH | CRITICAL
+  confidence      Int       @default(80) // 0-100
+  source          String    @default("CLIENT") // CLIENT | SERVEUR | CROISEE
+  detectorVersion String    @default("2.0.0")
+  details         String    @default("{}") // JSON: faits observés minimisés
+  evidence        String? // référence de preuve (hash d'intégrité)
+  isFalse         Boolean   @default(false) // marqué faux positif par le staff
+  caseId          String?
+  case            CaseFile? @relation(fields: [caseId], references: [id])
+  createdAt       DateTime  @default(now())
+
+  @@index([playerId])
+  @@index([type])
+  @@index([createdAt])
+  @@index([severity])
+  @@index([caseId])
+}
+
+// ---- Dossiers d'incident: regroupement, revue humaine, appel ----
+model CaseFile {
+  id            String    @id @default(cuid())
+  ref           String    @unique // RG-2026-0001
+  playerId      String
+  player        Player    @relation(fields: [playerId], references: [id])
+  serverId      String?
+  server        GameServer? @relation(fields: [serverId], references: [id])
+  status        String    @default("OPEN") // OPEN | REVIEWING | ESCALATED | CLOSED_FP | CLOSED_SANCTION | DISMISSED
+  summary       String    @default("") // types agrégés, ex: "FLY_NOCLIP x3, SPEEDHACK x2"
+  assignedToId  String?
+  assignedTo    Staff?    @relation("CasesAssigned", fields: [assignedToId], references: [id])
+  appealStatus  String    @default("NONE") // NONE | PENDING | ACCEPTED | REJECTED
+  openedAt      DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  closedAt      DateTime?
+  closedById    String?
+
+  notes       CaseNote[]
+  detections  Detection[]
+  transitions CaseTransition[]
+
+  @@index([playerId])
+  @@index([status])
+  @@index([openedAt])
+}
+
+model CaseNote {
+  id        String   @id @default(cuid())
+  caseId    String
+  case      CaseFile @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  staffId   String?
+  staff     Staff?   @relation(fields: [staffId], references: [id])
+  body      String
+  createdAt DateTime @default(now())
+
+  @@index([caseId])
+}
+
+// ---- Historique audité des transitions de statut (machine à états §28) ----
+// Chaque transition enregistre acteur, état d'origine/destination, motif (requis
+// pour clôture/escalade/réouverture), horodatage UTC. Aucun changement silencieux.
+model CaseTransition {
+  id         String   @id @default(cuid())
+  caseId     String
+  case       CaseFile @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  fromStatus String
+  toStatus   String
+  staffId    String?
+  staff      Staff?   @relation("CaseTransitions", fields: [staffId], references: [id])
+  reason     String? // motif obligatoire pour ESCALATED, clôtures et réouvertures
+  createdAt  DateTime @default(now())
+
+  @@index([caseId])
+}
+
+// ---- Révisions de configuration (§18/§28: BROUILLON → VALIDÉE → APPROUVÉE → ACTIVE) ----
+// L'activation n'est jamais une simple sauvegarde de formulaire: diff, approbation
+// séparée, checksum, retour arrière. Le chemin d'urgence (kill-switch) crée aussi
+// une révision ACTIVE marquée isEmergency pour garder une piste complète.
+model ConfigRevision {
+  id          String    @id @default(cuid())
+  revision    Int       @unique
+  status      String    @default("DRAFT") // DRAFT | VALIDATED | APPROVED | ACTIVE | SUPERSEDED | ROLLED_BACK
+  authorId    String?
+  author      Staff?    @relation("ConfigAuthor", fields: [authorId], references: [id])
+  approverId  String?
+  approver    Staff?    @relation("ConfigApprover", fields: [approverId], references: [id])
+  patch       String    @default("{}") // JSON: modifications sanitaires
+  diff        String    @default("{}") // JSON: { chemin: { avant, après } }
+  snapshot    String? // JSON: réglages COMPLETS résultants (rollback exact §28)
+  note        String? // motif / description
+  isEmergency Boolean   @default(false) // kill-switch direct (activation immédiate)
+  checksum    String // sha256 du patch canonique — détection de corruption, pas une preuve crypto
+  createdAt   DateTime  @default(now())
+  validatedAt DateTime?
+  approvedAt  DateTime?
+  activatedAt DateTime?
+
+  @@index([status])
+}
+
+model Ban {
+  id              String    @id @default(cuid())
+  playerId        String
+  player          Player    @relation(fields: [playerId], references: [id])
+  serverId        String?
+  server          GameServer? @relation(fields: [serverId], references: [id])
+  createdById     String?
+  createdBy       Staff?    @relation("BansCreated", fields: [createdById], references: [id])
+  type            String    @default("TEMP") // TEMP | PERM
+  reason          String
+  hwidBan         Boolean   @default(false)
+  identifiersHit  String    @default("[]") // JSON: identifiants bannis
+  expiresAt       DateTime?
+  revokedById     String?
+  revokedBy       Staff?    @relation("BansRevoked", fields: [revokedById], references: [id])
+  revokedAt       DateTime?
+  revokeReason    String?
+  isAuto          Boolean   @default(false) // généré par l'auto-sanction (mode ENFORCE)
+  appealStatus    String    @default("NONE") // NONE | PENDING | ACCEPTED | REJECTED
+  caseId          String?
+  createdAt       DateTime  @default(now())
+
+  appeals         Appeal[]
+
+  @@index([playerId])
+  @@index([createdAt])
+}
+
+// ---- Appels de sanction (joueurs bannis, sans compte staff) ----
+// Un joueur soumet un appel via le formulaire public (identifié par sa licence ou
+// la référence de ban); le staff statue avec motif. Jamais de décision silencieuse:
+// chaque décision est auditée et notifiée par webhook.
+model Appeal {
+  id           String    @id @default(cuid())
+  banId        String
+  ban          Ban       @relation(fields: [banId], references: [id])
+  playerName   String // nom déclaré par le joueur (indicatif, non fiable)
+  license      String // licence déclarée — doit correspondre au ban pour honorer l'appel
+  statement    String // plaidoirie du joueur (max 2000)
+  contact      String? // contact optionnel (Discord...)
+  status       String    @default("PENDING") // PENDING | ACCEPTED | REJECTED
+  handledById  String?
+  handledBy    Staff?    @relation("AppealsHandled", fields: [handledById], references: [id])
+  decisionNote String? // motif de la décision (obligatoire pour ACCEPTED/REJECTED)
+  createdAt    DateTime  @default(now())
+  decidedAt    DateTime?
+
+  @@index([banId])
+  @@index([status])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  staffId   String?
+  staff     Staff?   @relation(fields: [staffId], references: [id], onDelete: SetNull)
+  action    String // LOGIN, LOGIN_FAILED, BAN_CREATE, CASE_UPDATE, SETTINGS_UPDATE...
+  target    String?
+  details   String   @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model Webhook {
+  id          String    @id @default(cuid())
+  name        String
+  url         String
+  events      String    @default("[]") // JSON: ["detection.high","ban","unban","case.open"]
+  isActive    Boolean   @default(true)
+  lastStatus  String? // OK | ERREUR | ...
+  lastFiredAt DateTime?
+  createdAt   DateTime  @default(now())
+}
+
+// ---- Réglages persistants (mode, seuils détecteurs, rétention) ----
+model Setting {
+  key       String   @id
+  value     String // JSON
+  updatedAt DateTime @updatedAt
+}
