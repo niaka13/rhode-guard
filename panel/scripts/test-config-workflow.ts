@@ -8,7 +8,7 @@
  *
  * Exécution: bun run scripts/test-config-workflow.ts
  */
-const BASE = "http://localhost:3000";
+const BASE = process.env.RG_TEST_BASE_URL ?? "http://localhost:3000";
 import { Database } from "bun:sqlite";
 
 let passed = 0, failed = 0;
@@ -44,7 +44,13 @@ async function getConfig(apiKey: string) {
 }
 
 async function main() {
-  const db = new Database("/home/z/my-project/db/custom.db", { readonly: true });
+  const dbPath = process.env.RG_TEST_DB_PATH;
+  const auditorUsername = process.env.RG_TEST_AUDITOR_USERNAME;
+  const auditorPassword = process.env.RG_TEST_AUDITOR_PASSWORD;
+  if (!dbPath || !auditorUsername || !auditorPassword) {
+    throw new Error("Définir RG_TEST_DB_PATH, RG_TEST_AUDITOR_USERNAME et RG_TEST_AUDITOR_PASSWORD pour lancer ce test.");
+  }
+  const db = new Database(dbPath, { readonly: true });
   const apiKey = (db.query("SELECT apiKey FROM GameServer LIMIT 1").get() as { apiKey: string }).apiKey;
 
   console.log("== Workflow de révision de configuration — test d'intégration ==");
@@ -132,7 +138,7 @@ async function main() {
   T("dossier: escalade AVEC motif acceptée + transition enregistrée", good.status === 200);
 
   // 10) AUDITOR: lecture de l'audit autorisée, mutation refusée
-  const auditor = await login("auditor", "auditor123");
+  const auditor = await login(auditorUsername, auditorPassword);
   const auditRead = await api(auditor, "/api/admin/audit");
   T("auditeur: lecture du journal d'audit autorisée", auditRead.status === 200);
   const playersRead = await api(auditor, "/api/admin/players");
