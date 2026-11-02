@@ -13,8 +13,6 @@
 RHODE = RHODE or {}
 RHODE.Permissions = RHODE.Permissions or {}
 
-local bypassed = {} -- [src] = true
-
 local ACE = {
     bypass = 'rhode.bypass',
     staff  = 'rhode.staff',
@@ -23,12 +21,8 @@ local ACE = {
 
 --- Le joueur est-il en bypass (staff de confiance, développeurs) ?
 function RHODE.Permissions.IsBypassed(src)
-    if bypassed[src] then return true end
-    if IsPlayerAceAllowed(src, ACE.bypass) then
-        bypassed[src] = true
-        return true
-    end
-    return false
+    -- Lire ACE à chaque contrôle : une révocation de rôle doit être immédiate.
+    return src ~= 0 and IsPlayerAceAllowed(src, ACE.bypass) == true
 end
 
 --- Permission staff générique.
@@ -45,7 +39,7 @@ end
 
 --- Nettoyage à la déconnexion.
 function RHODE.Permissions.ClearPlayer(src)
-    bypassed[src] = nil
+    -- Point d’extension conservé pour l’API interne; aucun état de bypass n’est mémorisé.
 end
 
 --[[ ============ COMMANDES STAFF ============ ]]

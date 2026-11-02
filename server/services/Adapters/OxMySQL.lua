@@ -16,6 +16,13 @@ local available = false
 local bansReady = false
 local pendingWrites = 0
 
+local function migrationFailed(step, queryError)
+    if not queryError then return false end
+    print(('^1[RHODE GUARD] requête SQL échouée à l’étape %s; vérifier le schéma et la connexion^0')
+        :format(step))
+    return true
+end
+
 CreateThread(function()
     for _ = 1, 30 do
         if GetResourceState('oxmysql') == 'started' then
@@ -26,7 +33,7 @@ CreateThread(function()
     end
     if available then
         -- auto-migration si la table manque (idempotent: CREATE TABLE IF NOT EXISTS)
-        exports.oxmysql:execute([[
+        MySQL.query([[
             CREATE TABLE IF NOT EXISTS rhode_incidents (
                 id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
                 incident_id TEXT NOT NULL,
@@ -45,8 +52,9 @@ CreateThread(function()
                 context TEXT,
                 integrity TEXT
             )
-        ]], nil, function()
-            exports.oxmysql:execute([[
+        ]], nil, function(_, queryError)
+            if migrationFailed('création incidents', queryError) then return end
+            MySQL.query([[
                 CREATE TABLE IF NOT EXISTS rhode_bans (
                     license VARCHAR(80) NOT NULL PRIMARY KEY,
                     reason VARCHAR(255) NOT NULL,
@@ -57,11 +65,15 @@ CreateThread(function()
                     ban_count INTEGER NOT NULL DEFAULT 1,
                     ban_level VARCHAR(100) NOT NULL DEFAULT 'ban temporaire'
                 )
-            ]], nil, function()
-                exports.oxmysql:execute('ALTER TABLE rhode_bans ADD COLUMN IF NOT EXISTS ban_count INTEGER NOT NULL DEFAULT 1', nil, function()
-                    exports.oxmysql:execute("ALTER TABLE rhode_bans ADD COLUMN IF NOT EXISTS ban_level VARCHAR(100) NOT NULL DEFAULT 'ban temporaire'", nil, function()
+            ]], nil, function(_, queryError)
+                if migrationFailed('création sanctions', queryError) then return end
+                MySQL.query('ALTER TABLE rhode_bans ADD COLUMN IF NOT EXISTS ban_count INTEGER NOT NULL DEFAULT 1', nil, function(_, queryError)
+                    if migrationFailed('ajout compteur sanctions', queryError) then return end
+                    MySQL.query("ALTER TABLE rhode_bans ADD COLUMN IF NOT EXISTS ban_level VARCHAR(100) NOT NULL DEFAULT 'ban temporaire'", nil, function(_, queryError)
+                        if migrationFailed('ajout niveau sanction', queryError) then return end
                         -- Les anciennes lignes actives correspondent au moins à une sanction.
-                        exports.oxmysql:execute('UPDATE rhode_bans SET ban_count = 1 WHERE active = 1 AND ban_count < 1', nil, function()
+                        MySQL.query('UPDATE rhode_bans SET ban_count = 1 WHERE active = 1 AND ban_count < 1', nil, function(_, queryError)
+                            if migrationFailed('normalisation compteurs sanctions', queryError) then return end
                             bansReady = true
                             print('^2[RHODE GUARD] mode autonome oxmysql prêt (incidents + bans persistants et niveaux)^0')
                         end)
@@ -85,12 +97,12 @@ function RHODE.OxMySQL.CheckActiveBan(license, cb)
         if cb then cb(nil, false) end
         return
     end
-    exports.oxmysql:execute(
+    MySQL.query(
         'SELECT reason, case_ref, expires_at FROM rhode_bans WHERE license = ? AND active = 1 AND (expires_at IS NULL OR expires_at = 0 OR expires_at > ?) LIMIT 1',
         { license, os.time() },
-        function(rows)
+        function(rows, queryError)
             local ban = rows and rows[1] or nil
-            if cb then cb(ban, true) end
+            if cb then cb(ban, not queryError and rows ~= nil) end
         end
     )
 end
@@ -101,12 +113,12 @@ function RHODE.OxMySQL.GetBanCount(license, cb)
         if cb then cb(0, false) end
         return
     end
-    exports.oxmysql:execute(
+    MySQL.query(
         'SELECT ban_count FROM rhode_bans WHERE license = ? LIMIT 1',
         { license },
-        function(rows)
+        function(rows, queryError)
             local count = rows and rows[1] and tonumber(rows[1].ban_count) or 0
-            if cb then cb(count, true) end
+            if cb then cb(count, not queryError and rows ~= nil) end
         end
     )
 end
@@ -117,7 +129,7 @@ function RHODE.OxMySQL.IssueBan(ban, cb)
         if cb then cb(false) end
         return
     end
-    exports.oxmysql:execute([[
+    MySQL.query([[
         INSERT INTO rhode_bans (license, reason, case_ref, issued_at, expires_at, active, ban_count, ban_level)
         VALUES (?, ?, ?, ?, ?, 1, 1, ?)
         ON DUPLICATE KEY UPDATE reason = VALUES(reason), case_ref = VALUES(case_ref),
@@ -125,10 +137,12 @@ function RHODE.OxMySQL.IssueBan(ban, cb)
             ban_count = ban_count + 1, ban_level = VALUES(ban_level)
     ]], {
         ban.license, ban.reason, ban.caseRef, ban.issuedAt,
-        ban.expiresAt ~= 0 and ban.expiresAt or nil,
+        -- 0 représente un ban permanent (également accepté par CheckActiveBan).
+        -- Éviter nil au milieu du tableau Lua : oxmysql peut le sérialiser comme un trou.
+        ban.expiresAt ~= 0 and ban.expiresAt or 0,
         ban.level or 'ban temporaire',
-    }, function(result)
-        if cb then cb(result ~= nil) end
+    }, function(result, queryError)
+        if cb then cb(not queryError and result ~= nil) end
     end)
 end
 
@@ -138,11 +152,11 @@ function RHODE.OxMySQL.RevokeBan(license, cb)
         if cb then cb(false) end
         return
     end
-    exports.oxmysql:execute(
+    MySQL.query(
         'UPDATE rhode_bans SET active = 0 WHERE license = ? AND active = 1',
         { license },
-        function(result)
-            if cb then cb(result ~= nil) end
+        function(result, queryError)
+            if cb then cb(not queryError and result ~= nil) end
         end
     )
 end
@@ -155,7 +169,7 @@ function RHODE.OxMySQL.StoreIncident(evidence)
         return false
     end
     pendingWrites = pendingWrites + 1
-    exports.oxmysql:execute(
+    MySQL.query(
         'INSERT INTO rhode_incidents (incident_id, created_at, license, player_name, module, type, severity, confidence, source, detector_version, mode, case_ref, facts, context, integrity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         {
             evidence.incidentId,
@@ -174,8 +188,11 @@ function RHODE.OxMySQL.StoreIncident(evidence)
             json.encode(evidence.context or {}),
             evidence.integrity,
         },
-        function()
+        function(_, queryError)
             pendingWrites = pendingWrites - 1
+            if queryError then
+                print('^1[RHODE GUARD] incident non enregistré en base (échec SQL)^0')
+            end
         end
     )
     return true
@@ -188,7 +205,7 @@ function RHODE.OxMySQL.RecentIncidents(limit, cb)
         return
     end
     limit = math.min(math.max(tonumber(limit) or 20, 1), 100)
-    exports.oxmysql:execute(
+    MySQL.query(
         'SELECT * FROM rhode_incidents ORDER BY created_at DESC LIMIT ?',
         { limit },
         function(rows)
@@ -206,7 +223,7 @@ function RHODE.OxMySQL.EnsureEconomyTables(cb)
         if cb then cb(false, 'oxmysql indisponible') end
         return
     end
-    exports.oxmysql:execute([[
+    MySQL.query([[
         CREATE TABLE IF NOT EXISTS rhode_operations (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
             created_at INTEGER NOT NULL,
@@ -218,8 +235,12 @@ function RHODE.OxMySQL.EnsureEconomyTables(cb)
             amount REAL,
             result_code TEXT
         )
-    ]], nil, function()
-        exports.oxmysql:execute([[
+    ]], nil, function(_, queryError)
+        if migrationFailed('création journal économique', queryError) then
+            if cb then cb(false, 'création du journal économique échouée') end
+            return
+        end
+        MySQL.query([[
             CREATE TABLE IF NOT EXISTS rhode_idempotency (
                 scope VARCHAR(64) NOT NULL,
                 operation_key_digest VARCHAR(64) NOT NULL,
@@ -229,7 +250,11 @@ function RHODE.OxMySQL.EnsureEconomyTables(cb)
                 expires_at INTEGER NOT NULL,
                 PRIMARY KEY (scope, operation_key_digest)
             )
-        ]], nil, function()
+        ]], nil, function(_, queryError)
+            if migrationFailed('création idempotence économique', queryError) then
+                if cb then cb(false, 'création idempotence échouée') end
+                return
+            end
             print('^2[RHODE GUARD] économie: tables idempotence/journal vérifiées^0')
             if cb then cb(true) end
         end)
@@ -239,7 +264,7 @@ end
 --- Journalise une opération (asynchrone, best-effort, requêtes paramétrées).
 function RHODE.OxMySQL.StoreOperation(op)
     if not available then return false end
-    exports.oxmysql:execute(
+    MySQL.query(
         'INSERT INTO rhode_operations (created_at, license, op_type, state, idem_key_digest, payload_digest, amount, result_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         {
             os.time(), op.license or '', op.opType or '', op.state or '',
@@ -248,7 +273,7 @@ function RHODE.OxMySQL.StoreOperation(op)
     )
     -- persiste l'idempotence pour la reprise après redémarrage
     if op.idemKey and op.idemKey ~= '' then
-        exports.oxmysql:execute(
+        MySQL.query(
             'INSERT INTO rhode_idempotency (scope, operation_key_digest, payload_digest, status, result_json, expires_at) VALUES (?, ?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE status = VALUES(status), result_json = VALUES(result_json), expires_at = VALUES(expires_at)',
             {
                 'economy', op.idemKey, op.payloadDigest or '', op.state,
@@ -266,11 +291,16 @@ function RHODE.OxMySQL.LoadActiveIdempotency(cb)
         if cb then cb({}) end
         return
     end
-    exports.oxmysql:execute(
+    MySQL.query(
         'SELECT operation_key_digest, payload_digest, status, result_json, expires_at FROM rhode_idempotency WHERE expires_at > ?',
         { os.time() },
-        function(rows)
-            if cb then cb(rows or {}) end
+        function(rows, queryError)
+            if queryError then
+                print('^1[RHODE GUARD] clés d’idempotence non rechargées (échec SQL)^0')
+                if cb then cb({}, false) end
+                return
+            end
+            if cb then cb(rows or {}, rows ~= nil) end
         end
     )
 end

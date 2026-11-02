@@ -8,7 +8,10 @@ RHODE = RHODE or {}
 RHODE.Bans = RHODE.Bans or {}
 
 local recent = {} -- [license] = preuves serveur récentes, fenêtre bornée
+local recentTouched = {} -- [license] = dernier ajout, pour éviction mémoire bornée
 local pending = {} -- [license] = true pendant l'écriture SQL
+local MAX_TRACKED_LICENSES = 256
+local MAX_EVIDENCE_PER_LICENSE = 24
 local TRUSTED = {
     speed = { SPEEDHACK = true },
     teleport = { TELEPORT = true },
@@ -19,6 +22,52 @@ local TRUSTED = {
 
 local function settings()
     return Config.AutoBan or {}
+end
+
+local function pruneRecent(now, window)
+    local tracked = 0
+    for license, rows in pairs(recent) do
+        local kept = {}
+        for i = 1, #rows do
+            if now - rows[i].ts <= window then kept[#kept + 1] = rows[i] end
+        end
+        if #kept > 0 then
+            recent[license] = kept
+            tracked = tracked + 1
+        else
+            recent[license] = nil
+            recentTouched[license] = nil
+        end
+    end
+    return tracked
+end
+
+local function appendRecent(license, evidence, now, window)
+    local tracked = pruneRecent(now, window)
+    if not recent[license] and tracked >= MAX_TRACKED_LICENSES then
+        local oldestLicense, oldestAt
+        for key in pairs(recent) do
+            local touched = recentTouched[key] or 0
+            if not oldestAt or touched < oldestAt then
+                oldestLicense, oldestAt = key, touched
+            end
+        end
+        if oldestLicense then
+            recent[oldestLicense] = nil
+            recentTouched[oldestLicense] = nil
+        end
+    end
+
+    local rows = recent[license] or {}
+    rows[#rows + 1] = {
+        ts = now, module = evidence.module, type = evidence.type,
+        severity = evidence.severity, confidence = evidence.confidence,
+        incidentId = evidence.incidentId,
+    }
+    while #rows > MAX_EVIDENCE_PER_LICENSE do table.remove(rows, 1) end
+    recent[license] = rows
+    recentTouched[license] = now
+    return rows
 end
 
 local function qualifies(evidence)
@@ -88,19 +137,8 @@ function RHODE.Bans.Observe(evidence)
     if pending[evidence.license] then return false end
 
     local now = os.time()
-    local window = math.max(60, tonumber(cfg.windowMinutes) or 10) * 60
-    local rows = recent[evidence.license] or {}
-    local kept = {}
-    for i = 1, #rows do
-        if now - rows[i].ts <= window then kept[#kept + 1] = rows[i] end
-    end
-    kept[#kept + 1] = {
-        ts = now, module = evidence.module, type = evidence.type,
-        severity = evidence.severity, confidence = evidence.confidence,
-        incidentId = evidence.incidentId,
-    }
-    while #kept > 24 do table.remove(kept, 1) end
-    recent[evidence.license] = kept
+    local window = math.max(1, tonumber(cfg.windowMinutes) or 10) * 60
+    local kept = appendRecent(evidence.license, evidence, now, window)
 
     local shouldBan, summary = RHODE.Bans.Assess(kept, cfg)
     if not shouldBan then return false end
@@ -145,14 +183,15 @@ function RHODE.Bans.Observe(evidence)
                 DropPlayer(src, Config.Messages.banned:format(reason))
             end
             recent[evidence.license] = nil
+            recentTouched[evidence.license] = nil
         end)
     end)
     return true
 end
 
-function RHODE.Bans.ClearPlayer(src)
-    local license = GetPlayerIdentifierByType(src, 'license')
-    if license then recent[license] = nil end
+function RHODE.Bans.ClearPlayer(_src)
+    -- Ne pas effacer les preuves à la déconnexion : elles expirent après la fenêtre.
+    -- La mémoire est bornée à MAX_TRACKED_LICENSES licences et 24 preuves chacune.
 end
 
 RegisterCommand('rgunban', function(src, args)

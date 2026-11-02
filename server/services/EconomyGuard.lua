@@ -62,9 +62,16 @@ local function journalWrite(op)
 end
 
 --- Au démarrage: recharge les clés idempotentes non expirées (reprise après restart).
-function RHODE.Economy.ReloadIdempotency()
-    if not (RHODE.OxMySQL and RHODE.OxMySQL.Available()) then return 0 end
-    RHODE.OxMySQL.LoadActiveIdempotency(function(rows)
+function RHODE.Economy.ReloadIdempotency(cb)
+    if not (RHODE.OxMySQL and RHODE.OxMySQL.Available()) then
+        if cb then cb(false, 'oxmysql indisponible') end
+        return 0
+    end
+    RHODE.OxMySQL.LoadActiveIdempotency(function(rows, ready)
+        if not ready then
+            if cb then cb(false, 'rechargement idempotence SQL échoué') end
+            return
+        end
         local n = 0
         for i = 1, #(rows or {}) do
             local r = rows[i]
@@ -79,6 +86,7 @@ function RHODE.Economy.ReloadIdempotency()
         if n > 0 then
             print(('[RHODE GUARD] économie: %d clé(s) d\'idempotence rechargée(s) depuis la base'):format(n))
         end
+        if cb then cb(true) end
     end)
     return 0
 end

@@ -64,8 +64,8 @@ HMAC-SHA256 avec rotation de clés (non inclus, documenté).
 
 | Niveau | Statut | Détail |
 |---|---|---|
-| Statique (syntaxe Lua 5.4) | ✅ exécuté | 30/30 fichiers chargés via `load()` sans erreur |
-| Unitaire (Lua pur) | ✅ exécuté | **51/51**: schémas (13), rate-limit (7), score (6), **opérations économiques/idempotence (12), verrous (7), rulebook (5)** — un défaut réel de libération ré-entrante corrigé grâce aux tests |
+| Statique (syntaxe Lua) | ✅ exécuté | 35/35 fichiers analysés avec luaparser sans erreur |
+| Unitaire (Lua pur) | ✅ exécuté | **74/74**: schémas, rate-limit, score, opérations/idempotence, verrous, rulebook, combat, niveaux de ban, expiration des preuves et révocation ACE — aucune native FXServer n’est exécutée par ces tests |
 | Unitaire (TypeScript, module pur) | ✅ exécuté | 13/13: machine à états des dossiers (transitions permises/refusées, motifs requis, refus par défaut) |
 | Intégration (API panel) | ✅ exécuté | ingest v2 (dossier auto, mode), config live, bans/check, **health, workflow de révision (draft→validate→approve→activate→rollback), transitions motivées (409/400 attendus)** — sur l'environnement de démonstration |
 | E2E navigateur | ✅ exécuté | connexion, dossiers (transition motivée + historique), réglages (kill-switch propagé < 60 s vérifié via /api/v1/config), responsive mobile, 0 erreur console |

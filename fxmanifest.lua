@@ -10,8 +10,8 @@
       4. server/services/* → guards et services (autorité)
       5. server/main.lua    → bootstrap, orchestration, exports
 
-    Dépendances OPTIONNELLES (détection automatique, arrêt contrôlé si requises):
-      - oxmysql (mode autonome sans panel)
+    Dépendances:
+      - oxmysql (bibliothèque SQL, stockage local des bans et incidents)
       - es_extended (contexte économie)
       - ox_inventory (validation inventaire)
 ]]
@@ -19,6 +19,9 @@
 fx_version 'cerulean'
 game 'gta5'
 lua54 'yes'
+server_script '@oxmysql/lib/MySQL.lua'
+mysql_option 'return_callback_errors'
+dependency 'oxmysql'
 
 name 'rhode_guard'
 author 'Rhode RP\' +'

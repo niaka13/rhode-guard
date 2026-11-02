@@ -14,13 +14,16 @@ Auteur: **Rhode RP' +** · Licence: usage serveur, projet défensif uniquement
 | Composant | Rôle | Emplacement |
 |---|---|---|
 | **Ressource FiveM** | Guards serveur autoritaires (mouvement, événements, combat, véhicules, économie), télémétrie croisée, opérations économiques idempotentes, preuves minimisées | ce dossier (`resources/rhode_guard`) |
-| **Panel web** | Dashboard temps réel + santé, dossiers avec machine à états motivée, sanctions, rôles (dont Auditeur), réglages avec workflow de révision, audit, webhooks | application web séparée (voir `docs/PANEL.md`) |
+| **Panel web** | Composant prévu dans l’architecture; cette interface n’est pas fournie dans ce dépôt ni déployée | indisponible pour l’instant |
 | **Base de données** | Panel: Prisma (référence). Mode autonome: oxmysql (`migrations/`) | — |
+
+> **État réel du panel (2 novembre 2026)** : la ressource FiveM fonctionne en mode autonome oxmysql. `Config.PanelURL` et `Config.ApiKey` sont vides. Il n’existe donc pas d’adresse web à ouvrir pour RHODE Guard et aucun événement ne part vers un dashboard. `docs/PANEL.md` décrit la cible fonctionnelle, pas une interface installée.
 
 ## Démarrage rapide
 
-1. **Panel**: déployer l'application web, créer un compte OWNER, enregistrer le
-   serveur (SERVEURS → + AJOUTER) et copier la clé API.
+1. **Panel (à réaliser)** : déployer une application web de production sécurisée,
+   créer un compte OWNER, enregistrer le serveur puis produire une clé API dédiée.
+   Cette étape n’est pas faite; ne renseigne pas d’URL ou de clé fictive.
 2. **Ressource**: déposer ce dossier dans `resources/rhode_guard`, renseigner
    `config/server.lua` (URL panel + clé API).
 3. **server.cfg**:
@@ -38,7 +41,7 @@ Auteur: **Rhode RP' +** · Licence: usage serveur, projet défensif uniquement
    actions ENFORCE : il exige au moins 4 preuves serveur allowlistées, 2 catégories
    distinctes, et une preuve critique ou des violations de mouvement répétées.
    Il enregistre le ban dans `rhode_bans` avant d'expulser le joueur; durée par
-   paliers configurables : 24 h, 7 jours, 30 jours, puis ban permanent à la quatrième sanction confirmée. Les signaux client seuls ne bannissent jamais.
+   paliers configurables : 24 h, 7 jours, 30 jours, puis ban permanent à la quatrième sanction confirmée. Les preuves s'accumulent sur la fenêtre réelle configurée (10 minutes par défaut), même après une reconnexion, puis expirent. Les signaux client seuls ne bannissent jamais.
 
 Guide détaillé: [`docs/INSTALLATION.md`](docs/INSTALLATION.md) ·
 Flux métier de bout en bout: [`docs/FLUX.md`](docs/FLUX.md)
@@ -94,9 +97,9 @@ Modèle complet boutique: `docs/examples/shop_server.lua` (documenté, non charg
 ## Tests
 
 ```bash
-lua54 tests/run_tests.lua   # 51 tests: schémas, rate-limit, score, opérations, verrous, rulebook
+lua54 tests/run_tests.lua   # 76 tests: schémas, rate-limit, score, opérations, verrous, rulebook, combat, bans, permissions
 ```
-Vérifié localement: 51/51 OK (Lua 5.4 via interpréteur WASM) · syntaxe 30/30 ·
+Vérifié localement le 2 novembre 2026: 76/76 OK (Lua 5.5 via Lupa) · syntaxe 36/36 ·
 machine à états dossiers 13/13 (TypeScript). Les natives FiveM nécessitent une
 préproduction — scénarios dans `docs/FLUX.md` et `docs/SECURITE.md`.
 
@@ -104,7 +107,7 @@ préproduction — scénarios dans `docs/FLUX.md` et `docs/SECURITE.md`.
 
 | Composant | Conçu | Implémenté | Vérifié statiquement | Testé local | Testé préprod | Validé live |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
-| Guards mouvement/événements/combat/véhicules (Lua) | ✓ | ✓ | ✓ (syntaxe 30/30) | partiel (schémas, rl, score — 51 tests) | ✗ | ✗ |
+| Guards mouvement/événements/combat/véhicules (Lua) | ✓ | ✓ | ✓ (syntaxe 36/36) | partiel (tests unitaires Lua pur — 76 tests) | ✗ | ✗ |
 | Économie: idempotence, verrous, journal (Lua) | ✓ | ✓ | ✓ | ✓ (14 tests invariants) | ✗ (scénarios FLUX.md à rejouer) | ✗ |
 | Rulebook + preuves minimisées | ✓ | ✓ | ✓ | ✓ (6 tests intégrité) | ✗ | ✗ |
 | Panel: dashboard/santé/dossiers/sanctions | ✓ | ✓ | ✓ (lint 0) | ✓ E2E navigateur | ✗ | ✗ |

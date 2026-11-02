@@ -46,7 +46,7 @@ end
 -- CLIENT HTTP PANEL (santé + file de rejeu)
 -- ============================================================
 RHODE.Panel = RHODE.Panel or {}
-local panelHealthy = true
+local panelHealthy = false
 local lastPanelOk = 0
 
 function RHODE.Panel.IsConfigured()
@@ -66,17 +66,19 @@ function RHODE.Panel.Request(method, path, body, cb)
         return
     end
     PerformHttpRequest(Config.PanelURL .. path, function(status, response)
+        local panelRecovered = status == 200 and not panelHealthy
         if status == 200 then
             panelHealthy = true
             lastPanelOk = os.time()
-            -- panel revenu → rejeu de la file de preuves
-            if RHODE.Evidence and RHODE.Evidence.QueueSize() > 0 then
-                RHODE.Evidence.FlushQueue()
-            end
         elseif status == 0 or status >= 500 then
             panelHealthy = false
         end
         if cb then cb(status, response and json.decode(response) or nil) end
+        -- Un seul déclenchement lors du retour du panel. Les réponses HTTP des
+        -- envois du rejeu ne relancent donc pas récursivement un second rejeu.
+        if panelRecovered and RHODE.Evidence and RHODE.Evidence.QueueSize() > 0 then
+            RHODE.Evidence.FlushQueue()
+        end
     end, method, body and json.encode(body) or '', {
         ['Content-Type'] = 'application/json',
         ['X-API-Key'] = Config.ApiKey,
@@ -101,24 +103,6 @@ local function extractLicense(src)
     return GetPlayerIdentifierByType(src, 'license')
 end
 
-local function extractIdentifiers(src)
-    local ids = {}
-    for _, idType in ipairs({ 'license', 'steam', 'discord', 'xbl', 'live', 'fivem', 'ip' }) do
-        local id = GetPlayerIdentifierByType(src, idType)
-        if id then ids[idType] = id end
-    end
-    return ids
-end
-
-local function extractHwids(src)
-    local hwids = {}
-    local n = GetNumPlayerTokens(src)
-    for i = 0, n - 1 do
-        hwids[#hwids + 1] = GetPlayerToken(src, i)
-    end
-    return hwids
-end
-
 local function rotateToken(src)
     local token = ('%s-%s-%s'):format(math.random(111111, 999999), os.time(), math.random(1111, 9999))
     playerTokens[src] = token
@@ -136,12 +120,19 @@ AddEventHandler('playerConnecting', function(name, setKickReason, deferrals)
 
     local license = extractLicense(src)
     if not license then
-        deferrals.done()
+        deferrals.done('Une licence FiveM valide est nécessaire pour vérifier les sanctions.')
         return
     end
 
     -- Le stockage local est prioritaire: les bans persistent même sans panel.
-    if RHODE.OxMySQL and RHODE.OxMySQL.Available() then
+    -- Refuser l'entrée si la source de vérité des sanctions est indisponible.
+    if not RHODE.OxMySQL or not RHODE.OxMySQL.Available() then
+        print('^1[RHODE GUARD] vérification des bans impossible: oxmysql indisponible; connexion refusée^0')
+        deferrals.done('La vérification de sécurité est temporairement indisponible. Réessaie dans quelques instants.')
+        return
+    end
+
+    do
         local localDone, localBan, localReady = false, nil, false
         local localWaited = 0
         repeat
@@ -165,7 +156,9 @@ AddEventHandler('playerConnecting', function(name, setKickReason, deferrals)
             deferrals.done(Config.Messages.banned:format(reason))
             return
         elseif not localReady then
-            print('^3[RHODE GUARD] stockage local des bans indisponible à la connexion^0')
+            print('^1[RHODE GUARD] stockage local des bans indisponible; connexion refusée^0')
+            deferrals.done('La vérification de sécurité est temporairement indisponible. Réessaie dans quelques instants.')
+            return
         end
     end
 
@@ -227,8 +220,6 @@ RegisterNetEvent(RHODE.EVENTS.PLAYERREADY, function()
             event = 'join',
             license = license,
             name = GetPlayerName(src),
-            identifiers = extractIdentifiers(src),
-            hwid = extractHwids(src)[1],
         })
     end
     print(('[RHODE GUARD] %s connecté — surveillé (mode %s)'):format(
@@ -564,15 +555,20 @@ CreateThread(function()
     if RHODE.OxMySQL.Available() then
         RHODE.OxMySQL.EnsureEconomyTables(function(ok, reason)
             if ok then
-                RHODE.Economy.ReloadIdempotency()
-            else
-                degraded[#degraded + 1] = reason or 'schéma SQL indisponible'
+                RHODE.Economy.ReloadIdempotency(function(reloaded, reloadReason)
+                    if not reloaded then
+                        degraded[#degraded + 1] = reloadReason or 'rechargement idempotence SQL indisponible'
+                    end
+                    if #degraded > 0 then
+                        RHODE.Runtime.SetState('DEGRADE', table.concat(degraded, ', '))
+                    else
+                        RHODE.Runtime.SetState('PRET')
+                    end
+                end)
+                return
             end
-            if #degraded > 0 then
-                RHODE.Runtime.SetState('DEGRADE', table.concat(degraded, ', '))
-            else
-                RHODE.Runtime.SetState('PRET')
-            end
+            degraded[#degraded + 1] = reason or 'schéma SQL indisponible'
+            RHODE.Runtime.SetState('DEGRADE', table.concat(degraded, ', '))
         end)
     else
         -- facultatif: pas de dégradation bloquante, mais journalisée

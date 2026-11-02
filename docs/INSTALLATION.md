@@ -1,11 +1,14 @@
 # RHODE GUARD ULTIMATE — Installation
 
-## 1. Panel web
+## 1. Panel web — non fourni
 
-Le panel (Next.js + Prisma) est une application séparée, déployée sur ton domaine
-(HTTPS obligatoire en production: reverse proxy Nginx/Caddy + TLS).
+Le panel décrit dans `PANEL.md` n’est qu’une spécification. Aucun projet Next.js,
+schéma Prisma ou endpoint de production n’est livré ici à cette date. L’installation
+web est donc **à réaliser**; ne configure pas d’adresse ou de clé de démonstration.
+Pour une mise en production, il faudra une application auditée, une base dédiée et
+un domaine HTTPS (TLS valide) avant de renseigner `Config.PanelURL` et `Config.ApiKey`.
 
-1. Déployer l'application (variables d'environnement: base de données, secrets).
+1. Déployer l'application web réelle (variables d'environnement: base de données, secrets).
 2. Créer le premier compte OWNER (les comptes de démo **owner/admin/modo/support
    doivent être supprimés ou re-mot-de-passés** avant tout usage réel).
 3. **SERVEURS → + AJOUTER**: nom du serveur → copier la **clé API** générée.

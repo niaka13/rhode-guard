@@ -38,6 +38,7 @@ dofile(root .. '/server/services/LockManager.lua')
 dofile(root .. '/server/services/CombatGuard.lua')
 RegisterCommand = RegisterCommand or function() end
 dofile(root .. '/server/services/BanService.lua')
+dofile(root .. '/server/services/PermissionService.lua')
 
 -- charge les suites
 dofile(scriptDir .. '/test_schemas.lua')
@@ -47,6 +48,8 @@ dofile(scriptDir .. '/test_operations.lua')
 dofile(scriptDir .. '/test_locks_rulebook.lua')
 dofile(scriptDir .. '/test_combat.lua')
 dofile(scriptDir .. '/test_bans.lua')
+dofile(scriptDir .. '/test_evidence_queue.lua')
+dofile(scriptDir .. '/test_permissions.lua')
 print('================================================')
 print(' RHODE GUARD ULTIMATE v2.4 — tests unitaires (Lua pur)')
 print('================================================')

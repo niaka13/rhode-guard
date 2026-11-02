@@ -1,7 +1,13 @@
 # RHODE GUARD ULTIMATE — Guide du panel & matrice de permissions
 
-Le panel est en français, responsive (desktop/tablette/mobile), style terminal.
-Navigation clavier complète; chaque action sensible est auditée.
+> **Statut : spécification, pas application installée.** Au 2 novembre 2026, ce
+> dépôt contient la ressource FiveM, mais aucun code d’interface web RHODE Guard.
+> Le serveur fonctionne en mode autonome; aucune URL de panel ni clé API n’est
+> configurée. Les vues, rôles et comportements ci-dessous décrivent la cible à
+> construire et à vérifier avant d’annoncer le panel comme disponible.
+
+La cible doit être en français, responsive (ordinateur/tablette/téléphone),
+accessible au clavier et auditer chaque action sensible.
 
 ## Vues
 

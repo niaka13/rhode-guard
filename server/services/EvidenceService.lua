@@ -56,6 +56,8 @@ end
 function RHODE.Evidence.Build(ctx)
     local detectors = (RHODE.Runtime and RHODE.Runtime.detectors) or {}
     local rule = RHODE.RuleFor and RHODE.RuleFor(ctx.module) or nil
+    local sessionSource = tonumber(ctx.src)
+    if sessionSource then sessionSource = math.floor(sessionSource) end
     local evidence = {
         incidentId = nextIncidentId(),
         ts = os.time(),                 -- epoch UTC, formaté par le panel
@@ -78,6 +80,10 @@ function RHODE.Evidence.Build(ctx)
         context = ctx.context or {},
     }
     evidence.integrity = fingerprint(evidence)
+    -- Identifiant de session éphémère utilisé uniquement par BanService pour
+    -- expulser le joueur encore relié à cette preuve. Il reste hors empreinte,
+    -- SQL, file rejouée et payload panel afin de ne pas le rendre persistant.
+    evidence.src = sessionSource
     return evidence
 end
 
@@ -141,6 +147,7 @@ end
     sont évacuées; les critiques passent en stockage local oxmysql si disponible. ]]
 local queue = {}
 local QUEUE_MAX = 200
+local flushingQueue = false
 
 function RHODE.Evidence.EnqueueLocal(evidence)
     queue[#queue + 1] = evidence
@@ -172,27 +179,55 @@ end
 
 --- Rejoue la file vers le panel (appelé quand le relay redevient joignable).
 function RHODE.Evidence.FlushQueue()
-    if not RHODE.Panel or not RHODE.Panel.IsConfigured() then return #queue end
-    local n = 0
-    for i = 1, #queue do
-        local e = queue[i]
+    if not RHODE.Panel or not RHODE.Panel.IsConfigured() or flushingQueue then return #queue end
+    if #queue == 0 then return 0 end
+
+    -- Envoi séquentiel et acquitté: on ne retire une preuve qu'après HTTP 200.
+    -- Le verrou évite plusieurs rejeux simultanés; une panne conserve le reste.
+    flushingQueue = true
+    local sent = 0
+    local function sendNext()
+        local evidence = queue[1]
+        if not evidence then
+            flushingQueue = false
+            if sent > 0 then
+                print(('[RHODE GUARD] file de preuves acquittée: %d incident(s) reçus par le panel'):format(sent))
+            end
+            return
+        end
+
         RHODE.Panel.Post('/ingest/detection', {
-            license = e.license,
-            name = e.name,
-            type = e.type,
-            severity = e.severity,
-            confidence = e.confidence,
-            source = e.source,
-            detectorVersion = e.detectorVersion,
-            details = { facts = e.facts, context = e.context, incidentId = e.incidentId, delayed = true },
-        })
-        n = n + 1
+            license = evidence.license,
+            name = evidence.name,
+            type = evidence.type,
+            severity = evidence.severity,
+            confidence = evidence.confidence,
+            source = evidence.source,
+            detectorVersion = evidence.detectorVersion,
+            details = { facts = evidence.facts, context = evidence.context, incidentId = evidence.incidentId, delayed = true },
+        }, function(status)
+            if status ~= 200 then
+                flushingQueue = false
+                print(('^1[RHODE GUARD] rejeu suspendu: le panel n’a pas acquitté %s (HTTP %s); preuve conservée^0')
+                    :format(evidence.incidentId or 'incident', tostring(status)))
+                return
+            end
+
+            -- La file peut avoir changé pendant la requête (limite de capacité).
+            -- Retirer exactement l'objet acquitté, sans effacer les nouveaux ajouts.
+            for i = 1, #queue do
+                if queue[i] == evidence then
+                    table.remove(queue, i)
+                    break
+                end
+            end
+            sent = sent + 1
+            sendNext()
+        end)
     end
-    if n > 0 then
-        print(('[RHODE GUARD] file de preuves rejouée: %d incident(s) transmis(s) au panel'):format(n))
-        queue = {}
-    end
-    return 0
+
+    sendNext()
+    return #queue
 end
 
 function RHODE.Evidence.QueueSize()
